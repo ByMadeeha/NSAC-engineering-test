@@ -38,8 +38,53 @@ function start(){let name=$('#name').value.trim();if(!name)return $('#name').foc
 function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;')}
 function paperHTML(payload){let rows='';qs.forEach((q,qi)=>{rows+=`<section class=\"q\"><h2>${esc(q[0])} <small>${q[1]} marks</small></h2>${q[3].map((sub,i)=>`<div class=\"part\"><b>(${String.fromCharCode(97+i)})</b> ${esc(sub[0])}<div class=\"answer\">${esc(payload.answers[(qi+1)+'.'+i]||'').replace(/\n/g,'<br>')||'<em>No answer recorded.</em>'}</div></div>`).join('')}</section>`});return `<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>NSAC Engineering Test — ${esc(payload.candidate)}</title><style>body{margin:0;background:#dfe2dc;color:#17201e;font-family:Georgia,serif}.paper{max-width:850px;margin:30px auto;background:#fffefa;padding:55px;box-shadow:0 8px 30px #0002}h1{font-size:42px;font-weight:500;margin-bottom:4px}h2{font-size:24px;font-weight:500;border-bottom:1px solid #cbd0c8;padding-bottom:10px;margin-top:38px}h2 small{float:right;font:11px monospace;color:#68716d}.meta{font:12px monospace;border-block:1px solid #cbd0c8;padding:15px 0;margin:24px 0;line-height:1.8}.part{margin:22px 0;font-size:15px;line-height:1.5}.answer{white-space:normal;background:#f5f3ed;border:1px solid #cbd0c8;padding:13px;margin-top:8px;min-height:30px;font:13px/1.55 monospace}em{color:#68716d}@media print{body{background:white}.paper{margin:0;box-shadow:none;padding:30px}h2{break-after:avoid}.part{break-inside:avoid}}@media(max-width:700px){.paper{margin:0;padding:22px}h1{font-size:32px}}</style></head><body><main class=\"paper\"><div style=\"font:11px monospace;letter-spacing:.14em;color:#1f5c55\">NSAC / ENGINEERING ASSESSMENT / 2026</div><h1>NSAC Engineering Test</h1><div>Technical Problem Paper — Candidate Submission</div><div class=\"meta\"><b>Candidate:</b> ${esc(payload.candidate)}<br><b>Started:</b> ${new Date(payload.started_at).toLocaleString()}<br><b>Submitted:</b> ${new Date(payload.submitted_at).toLocaleString()}<br><b>Time used:</b> ${fmt(payload.time_used_seconds)}</div>${rows}</main></body></html>`}
 function dataURL(text,mime){return 'data:'+mime+';base64,'+btoa(unescape(encodeURIComponent(text)))}
-async function sendEmail(payload){if(!EMAIL_ENABLED) return false;emailjs.init({publicKey:EMAILJS_PUBLIC_KEY});let paper=paperHTML(payload);let json=JSON.stringify(payload,null,2);let safe=payload.candidate.replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'')||'candidate';let params={candidate_name:payload.candidate,submitted_at:new Date(payload.submitted_at).toLocaleString(),time_used:fmt(payload.time_used_seconds),paper_filename:`NSAC-Engineering-Test-${safe}.html`,data_filename:`NSAC-Engineering-Test-${safe}.json`,paper:dataURL(paper,'text/html'),data:dataURL(json,'application/json')};await emailjs.send(EMAILJS_SERVICE_ID,EMAILJS_TEMPLATE_ID,params);return true}
-async function submit(auto=false){if(S.submitted)return;if(!auto&&!confirm('Submit the examination now? You will not be able to continue.'))return;let end=Date.now();let payload={exam:'NSAC Engineering Test',version:'2026.09',candidate:S.name,started_at:new Date(S.start).toISOString(),submitted_at:new Date(end).toISOString(),time_used_seconds:Math.min(TOTAL,Math.floor((end-S.start)/1000)),answers:S.answers,question_count:qs.length,total_marks:100,submission_mode:EMAIL_ENABLED?'email':'local-download'};window.payload=payload;$('#submit').disabled=true;$('#submit').textContent=EMAIL_ENABLED?'Preparing submission…':'Finalising…';try{let emailed=await sendEmail(payload);payload.email_recorded=emailed;S.submitted=true;save();$('#exam').classList.add('hidden');$('#done').classList.remove('hidden');$('#doneText').innerHTML=EMAIL_ENABLED?`Candidate: <b>${esc(S.name)}</b>.<br>The clean examination paper and machine-readable backup have been sent to the examiner by email.<br><small>Time used: ${fmt(payload.time_used_seconds)}.</small>`:`Candidate: <b>${esc(S.name)}</b>.<br>Email submission is not configured yet, so use the backup JSON download below.<br><small>Time used: ${fmt(payload.time_used_seconds)}.</small>`}catch(e){$('#submit').disabled=false;$('#submit').textContent='Submit examination';alert('The submission could not be sent. Your answers remain safely saved on this device. Check the internet connection and try again.');}}
-$('#start').onclick=start;$('#submit').onclick=()=>submit(false);$('#prev').onclick=()=>{if(S.current>1)show(S.current-1)};$('#next').onclick=()=>{if(S.current<13)show(S.current+1)};$('#ref').onclick=()=>$('#refs').style.display='block';$('#close').onclick=()=>$('#refs').style.display='none';$('#refs').onclick=e=>{if(e.target.id==='refs')$('#refs').style.display='none'};$$('[data-ref]').forEach(x=>x.onclick=()=>$('#refs').style.display='block');$('#download').onclick=()=>{let b=new Blob([JSON.stringify(window.payload,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='NSAC-Engineering-Test-'+S.name.replace(/[^a-z0-9]+/gi,'-')+'.json';a.click()};window.onbeforeunload=save;document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')save()});window.addEventListener('pagehide',save);
-if(restore()){let left=TOTAL-Math.floor((Date.now()-S.start)/1000);if(S.started&&!S.submitted&&left>0){$('#name').value=S.name;$('#resume').classList.remove('hidden');$('#resume').innerHTML='<b>Unfinished examination detected.</b><br>This browser contains an active examination. <button class="secondary" id="resumeBtn">Resume it</button>';$('#resumeBtn').onclick=launch}else localStorage.removeItem(KEY)}
-</script></body></html>
+async function sendEmail(payload){
+  if(!EMAIL_ENABLED) return false;
+
+  // 1. Send the finished paper + answer data to Cloudflare
+  const workerResponse = await fetch(
+    'https://nsac-engineering-test.madeeha-od.workers.dev/submit',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+
+  if(!workerResponse.ok){
+    throw new Error('Cloudflare submission failed.');
+  }
+
+  const stored = await workerResponse.json();
+
+  if(!stored.success){
+    throw new Error(stored.error || 'Cloudflare submission failed.');
+  }
+
+  // 2. Send the links through EmailJS
+  emailjs.init({
+    publicKey: EMAILJS_PUBLIC_KEY
+  });
+
+  const params = {
+    candidate_name: payload.candidate,
+    submitted_at: new Date(payload.submitted_at).toLocaleString(),
+    time_used: fmt(payload.time_used_seconds),
+
+    paper_filename: stored.id,
+    data_filename: stored.id,
+
+    paper_url: stored.paper_url,
+    data_url: stored.data_url
+  };
+
+  await emailjs.send(
+    EMAILJS_SERVICE_ID,
+    EMAILJS_TEMPLATE_ID,
+    params
+  );
+
+  return true;
+  }
